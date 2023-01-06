@@ -1,7 +1,7 @@
 # ValueGraphSystemについて
 TOINIOT²
 
-###ArduinoIDEを使用してセンサ値をグラフ化する
+### ArduinoIDEを使用してセンサ値をグラフ化する
 
 Daisen製のTJ3B-Coreを使用している私たちのチームでは、Arduino IDEを活用して、センサ値の具体的な推移を見ることがあります。
 
