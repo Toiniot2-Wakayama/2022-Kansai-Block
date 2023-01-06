@@ -38,6 +38,17 @@ void user_main(void) {
 	int highValue2;
 	int lowQuantity;
 
+    /*
+    センサ値が最も大きいセンサのインデックス
+    センサ値が最も大きいセンサのセンサ値
+    センサ値が二番目に大きいセンサのインデックス
+    センサ値が二番目に大きいセンサのセンサ値
+    */
+    int disIndex;
+    int disValue;
+    int disIndex2;
+    int disValue2;
+
     //比較中のセンサ値
 	int comparingValue;
 	
@@ -131,6 +142,26 @@ void user_main(void) {
         gV[VAR_D] = highIndex2;
         gV[VAR_E] = highValue2;
 
-        //------------------------------------------------------------
+        //============================================================
+
+        disIndex = 9;
+        disValue = gAD[disIndex];
+        comparingValue = gAD[disIndex - 2];
+
+        if (comparingValue > disValue) {
+            disIndex = 7;
+            disIndex2 = disIndex + 2;
+        }
+        else {
+            disIndex2 = disIndex - 2;
+        }
+
+        disValue = gAD[disIndex];
+        disValue2 = gAD[disIndex2];
+
+        gV[VAR_F] = disIndex;
+        gV[VAR_G] = disValue;
+        gV[VAR_H] = disIndex2;
+        gV[VAR_I] = disValue2;
     }
 }
