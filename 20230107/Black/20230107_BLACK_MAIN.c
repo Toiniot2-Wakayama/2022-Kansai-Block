@@ -211,15 +211,18 @@ int btnMode;
 int mode;
 int btnTime;
 
-//--------------------------------------------------
-//@@@@@@@@@@
-//16方位から8方位に切り替える変数
-int caseEscape;
-//@@@@@@@@@@
-//距離センサ制御を区別する変数
-int distanceEscape;
+//サブCPUの起動状態を記録する変数
+int subFlag;
 
-//--------------------------------------------------
+//各セクションモジュール化に当たって使用する変数
+/*
+姿勢制御が完了したかどうかのフラグ変数
+白線避けが完了したかどうかのフラグ変数
+サブCPUが起動しているかを判断したかどうかのフラグ変数
+*/
+int dirFixComp;
+int lineAvoidComp;
+int subCPUComp;
 
 
 
@@ -573,11 +576,431 @@ int motionWrite(int motionDir) {
 
 
 
+
+//各セクション関数
+//姿勢制御関数（地磁気センサ使用）
+int dirFix(int controlType) {
+
+    //現在値を取得する
+    now = get_bno(0);
+
+    //前方方向と現在値との角度差を算出する
+    dif = front - now;
+
+    //角度差の値を比較しやすいように調整する
+    if (dif <= -180) {
+        dif += 360;
+    }
+    else if (dif >= 180) {
+        dif -= 360;
+    }
+
+    //もし角度差が前方方向の範囲しきい値の中にないなら
+    if ((-1 * FRONT_RANGE <= dif && dif <= FRONT_RANGE) == FALSE) {
+
+        //サブCPUの白色LEDを点灯させる
+        sub_io_set_Led(1, 0, on);
+
+        //微分係数を算出する
+        nowD = (now - previous) / DELTA_T;
+
+        //モーターパワーを算出する
+        if (controlType == 0) {
+            difMotor = KP * dif;
+        }
+        else if (controlType == 1) {
+            difMotor = KP * dif + KD * (nowD - previousD);
+        }
+
+        //比例制御の入っていない関数でモーターに出力する
+        moveNatural(difMotor, difMotor, difMotor, difMotor);
+
+        //直近過去の角度を更新する
+        previous = now;
+        //直近過去の微分係数を更新する
+        previousD = nowD;
+
+        //フラグ変数を下ろす
+        dirFixComp = 0;
+
+    }
+    else {
+        //サブCPUの白色LEDを点灯させる
+        sub_io_set_Led(1, 0, off);
+        
+        //フラグ変数を立てる
+        dirFixComp = 1;
+    }
+
+    return(0);
+}
+
+//白線避け関数（ラインセンサ使用）
+int lineAvoid(int controlType) {
+
+    //ラインセンサの入力値を取得してグローバル変数をラインセンサ用に更新する
+    refreshSensor(1, 0);
+
+    //------------------------------------------------------------
+
+    //もしラインセンサのどれかが反応していたら
+    if (lowQuantity != 4) {
+
+        //サブCPUの赤色LEDを点灯させる
+        sub_io_set_Led(1, 1, on);
+
+        move(0, 0, 0, 0, BALL);
+        wait_ms(LINESTOP);
+
+        //ラインセンサが1つ反応している
+        if (lowQuantity == 3) {
+
+            //反応しているラインセンサに応じて動く
+            switch (highIndex) {
+
+            case 0:
+                //前ラインセンサが反応
+                move(-80, -80, 80, 80, LINE);
+                wait_ms(LINEAVOID_DEFAULT);
+
+                motionWrite(1);
+
+                break;
+
+            case 1:
+                //左ラインセンサが反応
+                move(80, -80, -80, 80, LINE);
+                wait_ms(LINEAVOID_LONG);
+
+                motionWrite(2);
+                if (motionLongFlag == 1) {
+
+                    clr_timer(2);
+
+                    while (TRUE) {
+                        refreshSensor(1, 0);
+                        if (lowQuantity != 4) {
+                            switch (highIndex) {
+                            case 0:
+                                clr_timer(2);
+                                while (TRUE) {
+                                    refreshSensor(1, 0);
+                                    if (lowQuantity != 4) {
+                                        switch (highIndex) {
+                                        case 0:
+                                            move(0, 0, 0, 0, BALL);
+                                            wait_ms(LINESTOP);
+                                            move(-80, -80, 80, 80, LINE);
+                                            wait_ms(LINEAVOID_DEFAULT);
+                                            continue;
+
+                                        case 1:
+                                            move(0, 0, 0, 0, BALL);
+                                            wait_ms(LINESTOP);
+                                            move(80, -80, -80, 80, LINE);
+                                            wait_ms(LINEAVOID_DEFAULT);
+                                            continue;
+
+                                        case 2:
+                                            move(0, 0, 0, 0, BALL);
+                                            wait_ms(LINESTOP);
+                                            move(80, 80, -80, -80, LINE);
+                                            wait_ms(LINEAVOID_DEFAULT);
+                                            continue;
+
+                                        case 3:
+                                            move(0, 0, 0, 0, BALL);
+                                            wait_ms(LINESTOP);
+                                            move(-80, 80, 80, -80, LINE);
+                                            wait_ms(LINEAVOID_DEFAULT);
+                                            continue;
+                                        }
+                                    }
+
+                                    if (gT[2] > 500) {
+                                        break;
+                                    }
+
+                                    move(-80, -80, 80, 80, BALL);
+                                }
+
+                                break;
+
+                            case 1:
+                                move(0, 0, 0, 0, BALL);
+                                wait_ms(LINESTOP);
+                                move(80, -80, -80, 80, LINE);
+                                wait_ms(LINEAVOID_DEFAULT);
+                                continue;
+
+                            case 2:
+                                move(0, 0, 0, 0, BALL);
+                                wait_ms(LINESTOP);
+                                move(80, 80, -80, -80, LINE);
+                                wait_ms(LINEAVOID_DEFAULT);
+                                continue;
+
+                            case 3:
+                                move(0, 0, 0, 0, BALL);
+                                wait_ms(LINESTOP);
+                                move(-80, 80, 80, -80, LINE);
+                                wait_ms(LINEAVOID_DEFAULT);
+                                continue;
+                            }
+                            break;
+                        }
+                        
+                        if (gT[2] > 500) {
+                            break;
+                        }
+
+                        move(80, 80, -80, -80, BALL);
+                    }
+                    motionLongFlag = 0;
+                }
+
+                clr_timer(1);
+
+                break;
+
+            case 2:
+                //後ろラインセンサが反応
+                move(80, 80, -80, -80, LINE);
+                wait_ms(LINEAVOID_DEFAULT);
+
+                motionWrite(3);
+
+                break;
+
+            case 3:
+                //右ラインセンサが反応
+                move(-80, 80, 80, -80, LINE);
+                wait_ms(LINEAVOID_LONG);
+
+                motionWrite(4);
+                if (motionLongFlag == 1) {
+
+                    clr_timer(2);
+
+                    while (TRUE) {
+                        refreshSensor(1, 0);
+                        if (lowQuantity != 4) {
+                            switch (highIndex) {
+                            case 0:
+                                clr_timer(2);
+                                while (TRUE) {
+                                    refreshSensor(1, 0);
+                                    if (lowQuantity != 4) {
+                                        switch (highIndex) {
+                                        case 0:
+                                            move(0, 0, 0, 0, BALL);
+                                            wait_ms(LINESTOP);
+                                            move(-80, -80, 80, 80, LINE);
+                                            wait_ms(LINEAVOID_DEFAULT);
+                                            continue;
+
+                                        case 1:
+                                            move(0, 0, 0, 0, BALL);
+                                            wait_ms(LINESTOP);
+                                            move(80, -80, -80, 80, LINE);
+                                            wait_ms(LINEAVOID_DEFAULT);
+                                            continue;
+
+                                        case 2:
+                                            move(0, 0, 0, 0, BALL);
+                                            wait_ms(LINESTOP);
+                                            move(80, 80, -80, -80, LINE);
+                                            wait_ms(LINEAVOID_DEFAULT);
+                                            continue;
+
+                                        case 3:
+                                            move(0, 0, 0, 0, BALL);
+                                            wait_ms(LINESTOP);
+                                            move(-80, 80, 80, -80, LINE);
+                                            wait_ms(LINEAVOID_DEFAULT);
+                                            continue;
+                                        }
+                                    }
+
+                                    if (gT[2] > 500) {
+                                        break;
+                                    }
+
+                                    move(-80, -80, 80, 80, BALL);
+                                }
+
+                                break;
+
+                            case 1:
+                                move(0, 0, 0, 0, BALL);
+                                wait_ms(LINESTOP);
+                                move(80, -80, -80, 80, LINE);
+                                wait_ms(LINEAVOID_DEFAULT);
+                                continue;
+
+                            case 2:
+                                move(0, 0, 0, 0, BALL);
+                                wait_ms(LINESTOP);
+                                move(80, 80, -80, -80, LINE);
+                                wait_ms(LINEAVOID_DEFAULT);
+                                continue;
+
+                            case 3:
+                                move(0, 0, 0, 0, BALL);
+                                wait_ms(LINESTOP);
+                                move(-80, 80, 80, -80, LINE);
+                                wait_ms(LINEAVOID_DEFAULT);
+                                continue;
+                            }
+                            break;
+                        }
+
+                        if (gT[2] > 500) {
+                            break;
+                        }
+
+                        move(80, 80, -80, -80, BALL);
+                    }
+                    motionLongFlag = 0;
+                }
+
+                clr_timer(1);
+
+                break;
+            }
+
+            continue;
+        }
+
+        //------------------------------------------------------------
+
+        //ラインセンサが2つ反応している
+        else if (lowQuantity == 2) {
+            switch (highIndex) {
+            case 0:
+                switch (highIndex2) {
+                case 1:
+                    move(0, -80, 0, 80, LINE);
+                    wait_ms(LINEAVOID_DEFAULT);
+                    break;
+
+                case 3:
+                    move(-80, 0, 80, 0, LINE);
+                    wait_ms(LINEAVOID_DEFAULT);
+                    break;
+
+                default:
+                    move(-80, -80, 80, 80, LINE);
+                    wait_ms(LINEAVOID_DEFAULT);
+                    break;
+                }
+                break;
+
+            case 1:
+                switch (highIndex2) {
+                case 0:
+                    move(0, -80, 0, 80, LINE);
+                    wait_ms(LINEAVOID_DEFAULT);
+                    break;
+
+                case 2:
+                    move(80, 0, -80, 0, LINE);
+                    wait_ms(LINEAVOID_DEFAULT);
+                    break;
+
+                default:
+                    move(80, -80, -80, 80, LINE);
+                    wait_ms(LINEAVOID_DEFAULT);
+                    break;
+                }
+                break;
+
+            case 2:
+                switch (highIndex2) {
+                case 1:
+                    move(80, 0, -80, 0, LINE);
+                    wait_ms(LINEAVOID_DEFAULT);
+                    break;
+
+                case 3:
+                    move(0, 80, 0, -80, LINE);
+                    wait_ms(LINEAVOID_DEFAULT);
+                    break;
+
+                default:
+                    move(80, 80, -80, -80, LINE);
+                    wait_ms(LINEAVOID_DEFAULT);
+                    break;
+                }
+                break;
+
+            case 3:
+                switch (highIndex2) {
+                case 0:
+                    move(-80, 0, 80, 0, LINE);
+                    wait_ms(LINEAVOID_DEFAULT);
+                    break;
+
+                case 2:
+                    move(0, 80, 0, -80, LINE);
+                    wait_ms(LINEAVOID_DEFAULT);
+                    break;
+
+                default:
+                    move(-80, 80, 80, -80, LINE);
+                    wait_ms(LINEAVOID_DEFAULT);
+                    break;
+                }
+                break;
+            }
+        }
+
+        //フラグ変数を下ろす
+        lineAvoidComp = 0;
+    }
+
+    //どのラインセンサも反応していない
+    else {
+
+        //サブCPUの赤色LEDを消灯させる
+        sub_io_set_Led(1, 1, off);
+
+        //フラグ変数を立てる
+        lineAvoidComp = 1;
+    }
+    
+    return(0);
+}
+
+//サブCPU待機関数
+int subCPU(int controlType) {
+
+    //サブのCPUの変数を読み取る（読み取れない場合アリ）
+    subFlag = sub_io_get_gV(1, VAR_Z);
+
+    //もしサブCPUの変数が1以外（読み取れない、他の値など）なら
+    if (subFlag != 1) {
+
+        //モーターを停止させる
+        move(0, 0, 0, 0, 1);
+
+        //フラグ変数を下ろす
+        subCPUComp = 0;
+    }
+    else {
+        //フラグ変数を立てる
+        subCPUComp = 1;
+    }
+
+    return(0);
+}
+
+
+
+
+
 //メイン関数
 void user_main(void) {
-
-    //サブCPUの起動状態を記録する変数
-    int subFlag;
 
     //比例制御用の直近過去値の初期化
     lm0 = 0;
@@ -590,15 +1013,15 @@ void user_main(void) {
         lastMotion[i] = 0;
     }
 
+    //地磁気センサのセットアップを行う
+    set_bno();
+
     //姿勢制御に使用する変数の初期化・値取得
     /*
     前方方向の角度を地磁気センサで取得する
     仮で直近過去角度値に現在角度値を代入
     仮で直近過去の微分係数に0を代入
     */
-
-    set_bno();
-
     front = get_bno(0);
     previous = get_bno(0);
     previousD = 0;
@@ -607,13 +1030,13 @@ void user_main(void) {
     sub_io_set_gV(1, VAR_S, LINE_LOW);
 
     //直近の運動方向に応じたモーション延長のフラグ変数を初期化
-    motionLongFlag = 1;
+    motionLongFlag = 0;
 
     //Aボタンが押された回数・ボタンが押されたモードを初期化
     btnTime = 0;
     btnMode = 0;
 
-    //キーパー気がボールを検知しなかったときに後退するかどうかのフラグ変数を初期化する
+    //キーパー機がボールを検知しなかったときに後退するかどうかのフラグ変数を初期化する
     backStop = 0;
 
     //モード設定に飛ぶ
@@ -637,7 +1060,12 @@ modeSetting:
         sub_io_set_Led(1, 1, on);
 
         btnB = sub_io_get_sensor(1, 5);
-        if (btnB > 550) {
+        if (btnB > 550 && btnMode == 0) {
+            btnMode = 1;
+        }
+
+        if (btnB <= 550 && btnMode == 1) {
+            btnMode = 0;
             goto main;
         }
 
@@ -671,250 +1099,39 @@ main:
 
             //============================================================
 
-            //サブのCPUの変数を読み取る（読み取れない場合アリ）
-            subFlag = sub_io_get_gV(1, VAR_Z);
+            //サブCPUが起動しているかを測定する
 
-            //もしサブCPUの変数が1以外（読み取れない、他の値など）なら
-            if (subFlag != 1) {
+            //subCPUの引数に関係なくサブCPUの状況を測定する
+            subCPU(0);
 
-                //モーターを停止させる
-                move(0, 0, 0, 0, 1);
-
-                //無条件ループの最初に戻り続ける
+            //もしサブCPUが起動していなければ無条件ループの最初に戻る
+            if (subCPUComp == 0) {
                 continue;
             }
 
             //============================================================
 
-            //現在値を取得する
-            now = get_bno(0);
+            //地磁気センサを使用して姿勢制御を行う
 
-            //前方方向と現在値との角度差を算出する
-            dif = front - now;
+            //dirFixの引数が0ならP制御、1ならPD制御
+            dirFix(1);
 
-            //角度差の値を比較しやすいように調整する
-            if (dif <= -180) {
-                dif += 360;
-            }
-            else if (dif >= 180) {
-                dif -= 360;
-            }
-
-            //------------------------------------------------------------
-
-            //もし角度差が前方方向の範囲しきい値の中にないなら
-            if ((-1 * FRONT_RANGE <= dif && dif <= FRONT_RANGE) == FALSE) {
-
-                //サブCPUの白色LEDを点灯させる
-                sub_io_set_Led(1, 0, on);
-
-                //微分係数を算出する
-                nowD = (now - previous) / DELTA_T;
-
-                //モーターパワーを算出する
-                difMotor = KP * dif + KD * (nowD - previousD);
-                //difMotor = KP * dif;
-
-                //比例制御の入っていない関数でモーターに出力する
-                moveNatural(difMotor, difMotor, difMotor, difMotor);
-
-                //直近過去の角度を更新する
-                previous = now;
-                //直近過去の微分係数を更新する
-                previousD = nowD;
-
-                //無条件ループの最初に戻る
+            //もし姿勢制御が完了していなければ無条件ループの最初に戻る
+            if (dirFixComp == 0) {
                 continue;
             }
 
-            //サブCPUの白色LEDを消灯させる
-            sub_io_set_Led(1, 0, off);
-
             //============================================================
+            
+            //ラインセンサを使用して白線避けを行う
 
-            //ラインセンサの入力値を取得してグローバル変数をラインセンサ用に更新する
-            refreshSensor(1, 0);
+            //lineAvoidの引数に関係なく白線避けを行う
+            lineAvoid(0);
 
-            //------------------------------------------------------------
-
-            //もしラインセンサのどれかが反応していたら
-            if (lowQuantity != 4) {
-
-                //サブCPUの赤色LEDを点灯させる
-                sub_io_set_Led(1, 1, on);
-
-                moveNatural(0, 0, 0, 0);
-                wait_ms(LINESTOP);
-
-                //ラインセンサが1つ反応している
-                if (lowQuantity == 3) {
-
-                    //反応しているラインセンサに応じて動く
-                    switch (highIndex) {
-
-                    case 0:
-                        //前ラインセンサが反応
-                        move(-80, -80, 80, 80, LINE);
-                        wait_ms(LINEAVOID_DEFAULT);
-
-                        motionWrite(1);
-
-                        break;
-
-                    case 1:
-                        //左ラインセンサが反応
-                        move(80, -80, -80, 80, LINE);
-                        wait_ms(LINEAVOID_LONG);
-
-                        motionWrite(2);
-                        if (motionLongFlag == 1) {
-                            move(80, 80, -80, -80, BALL);
-                            wait_ms(200);
-
-                            clr_timer(2);
-
-                            while (TRUE) {
-                                refreshSensor(1, 0);
-                                if (gT[2] > 300 || lowQuantity != 4) {
-                                    break;
-                                }
-                                move(80, 80, -80, -80, BALL);
-                            }
-                            motionLongFlag = 0;
-                        }
-
-                        clr_timer(1);
-
-                        break;
-
-                    case 2:
-                        //後ろラインセンサが反応
-                        move(80, 80, -80, -80, LINE);
-                        wait_ms(LINEAVOID_DEFAULT);
-
-                        motionWrite(3);
-
-                        break;
-
-                    case 3:
-                        //右ラインセンサが反応
-                        move(-80, 80, 80, -80, LINE);
-                        wait_ms(LINEAVOID_LONG);
-
-                        motionWrite(4);
-                        if (motionLongFlag == 1) {
-                            move(80, 80, -80, -80, BALL);
-                            wait_ms(200);
-
-                            clr_timer(2);
-
-                            while (TRUE) {
-                                refreshSensor(1, 0);
-                                if (gT[2] > 300 || lowQuantity != 4) {
-                                    break;
-                                }
-                                move(80, 80, -80, -80, BALL);
-                            }
-                            motionLongFlag = 0;
-                        }
-
-                        clr_timer(1);
-
-                        break;
-                    }
-
-                    continue;
-                }
-
-                //------------------------------------------------------------
-
-                //ラインセンサが2つ反応している
-                else if (lowQuantity == 2) {
-                    switch (highIndex) {
-                    case 0:
-                        switch (highIndex2) {
-                        case 1:
-                            move(0, -80, 0, 80, LINE);
-                            wait_ms(LINEAVOID_DEFAULT);
-                            break;
-
-                        case 3:
-                            move(-80, 0, 80, 0, LINE);
-                            wait_ms(LINEAVOID_DEFAULT);
-                            break;
-
-                        default:
-                            move(-80, -80, 80, 80, LINE);
-                            wait_ms(LINEAVOID_DEFAULT);
-                            break;
-                        }
-                        break;
-
-                    case 1:
-                        switch (highIndex2) {
-                        case 0:
-                            move(0, -80, 0, 80, LINE);
-                            wait_ms(LINEAVOID_DEFAULT);
-                            break;
-
-                        case 2:
-                            move(80, 0, -80, 0, LINE);
-                            wait_ms(LINEAVOID_DEFAULT);
-                            break;
-
-                        default:
-                            move(80, -80, -80, 80, LINE);
-                            wait_ms(LINEAVOID_DEFAULT);
-                            break;
-                        }
-                        break;
-
-                    case 2:
-                        switch (highIndex2) {
-                        case 1:
-                            move(80, 0, -80, 0, LINE);
-                            wait_ms(LINEAVOID_DEFAULT);
-                            break;
-
-                        case 3:
-                            move(0, 80, 0, -80, LINE);
-                            wait_ms(LINEAVOID_DEFAULT);
-                            break;
-
-                        default:
-                            move(80, 80, -80, -80, LINE);
-                            wait_ms(LINEAVOID_DEFAULT);
-                            break;
-                        }
-                        break;
-
-                    case 3:
-                        switch (highIndex2) {
-                        case 0:
-                            move(-80, 0, 80, 0, LINE);
-                            wait_ms(LINEAVOID_DEFAULT);
-                            break;
-
-                        case 2:
-                            move(0, 80, 0, -80, LINE);
-                            wait_ms(LINEAVOID_DEFAULT);
-                            break;
-
-                        default:
-                            move(-80, 80, 80, -80, LINE);
-                            wait_ms(LINEAVOID_DEFAULT);
-                            break;
-                        }
-                        break;
-                    }
-
-                    continue;
-                }
-
+            //もし姿勢制御が完了していなければ無条件ループの最初に戻る
+            if (lineAvoidComp == 0) {
+                continue;
             }
-
-            //サブCPUの赤色LEDを消灯させる
-            sub_io_set_Led(1, 1, off);
 
             //============================================================
 
@@ -939,45 +1156,6 @@ main:
             set_Led(1, off);
 
             //------------------------------------------------------------
-            //距離測定なしで、最も大きいセンサのインデックスのみに応じたボール追従
-            /*
-            switch (highIndex) {
-            case 0:
-                //前：前
-                move(80, 80, -80, -80, BALL);
-                break;
-
-            case 1:
-                //左前：左
-                move(-80, 80, 80, -80, BALL);
-                break;
-
-            case 2:
-                //左：左後ろ
-                move(-80, 0, 80, 0, BALL);
-                break;
-
-            case 3:
-            case 5:
-                //左後ろ/右後ろ：後ろ
-                move(-80, -80, 80, 80, BALL);
-                break;
-
-            case 4:
-            case 7:
-                //後ろ/右前：右
-                move(80, -80, -80, 80, BALL);
-                break;
-
-            case 6:
-                //右：右後ろ
-                move(0, -80, 0, 80, BALL);
-                break;
-            }
-            //無条件ループの最初に戻る
-            continue;
-            */
-            //------------------------------------------------------------
             //距離測定ありで、最も大きいセンサのインデックスに応じたボール追従
 
             switch (sumFlag) {
@@ -985,32 +1163,39 @@ main:
                 //遠距離
                 switch (highIndex) {
                 case 0:
-                    move(80, 80, -80, -80, BALL);
+                    //前:前
+                    move(85, 85, -85, -85, BALL);
                     break;
 
                 case 1:
-                    move(0, 80, 0, -80, BALL);
+                    //左前:左前
+                    move(0, 85, 0, -85, BALL);
                     break;
 
                 case 2:
-                    move(-80, 80, 80, -80, BALL);
+                    //左:左
+                    move(-85, 85, 85, -85, BALL);
                     break;
 
                 case 3:
                 case 4:
-                    move(-80, 0, 80, 0, BALL);
+                    //左後ろ/後ろ:左後ろ
+                    move(-85, 0, 85, 0, BALL);
                     break;
 
                 case 5:
-                    move(0, -80, 0, 80, BALL);
+                    //右後ろ:右後ろ
+                    move(0, -85, 0, 85, BALL);
                     break;
 
                 case 6:
-                    move(80, -80, -80, 80, BALL);
+                    //右:右
+                    move(85, -85, -85, 85, BALL);
                     break;
 
                 case 7:
-                    move(80, 0, -80, 0, BALL);
+                    //右前:右前
+                    move(85, 0, -85, 0, BALL);
                     break;
                 }
                 break;
@@ -1019,28 +1204,34 @@ main:
                 //中距離
                 switch (highIndex) {
                 case 0:
+                    //前:前
                     move(80, 80, -80, -80, BALL);
                     break;
 
                 case 1:
+                    //左前:左
                     move(-80, 80, 80, -80, BALL);
                     break;
 
                 case 2:
+                    //左:左後ろ
                     move(-80, 0, 80, 0, BALL);
                     break;
 
                 case 3:
                 case 5:
+                    //左後ろ/右後ろ:後ろ
                     move(-80, -80, 80, 80, BALL);
                     break;
 
                 case 4:
                 case 7:
+                    //後ろ/右前:右
                     move(80, -80, -80, 80, BALL);
                     break;
 
                 case 6:
+                    //右:右後ろ
                     move(0, -80, 0, 80, BALL);
                     break;
                 }
@@ -1050,29 +1241,35 @@ main:
                 //近距離
                 switch (highIndex) {
                 case 0:
+                    //前:前
                     move(80, 80, -80, -80, BALL);
                     break;
 
                 case 1:
+                    //左前:左
                     move(-80, 80, 80, -80, BALL);
                     break;
 
                 case 2:
-                    move(-80, 0, 80, 0, BALL);
+                case 6:
+                    //左/右:後ろ
+                    move(-80, -80, 80, 80, BALL);
                     break;
 
                 case 3:
-                case 5:
-                    move(-80, -80, 80, 80, BALL);
+                    //左後ろ:右後ろ
+                    move(0, -80, 0, 80, BALL);
                     break;
 
                 case 4:
                 case 7:
+                    //後ろ/右前:右
                     move(80, -80, -80, 80, BALL);
                     break;
 
-                case 6:
-                    move(0, -80, 0, 80, BALL);
+                case 5:
+                    //右後ろ:左後ろ
+                    move(-80, 0, 80, 0, BALL);
                     break;
                 }
                 break;
@@ -1080,6 +1277,7 @@ main:
 
             //============================================================
 
+            //無条件ループの最初に戻る
             continue;
         }
         break;
@@ -1094,250 +1292,39 @@ main:
 
             //============================================================
 
-            //サブのCPUの変数を読み取る（読み取れない場合アリ）
-            subFlag = sub_io_get_gV(1, VAR_Z);
+            //サブCPUが起動しているかを測定する
 
-            //もしサブCPUの変数が1以外（読み取れない、他の値など）なら
-            if (subFlag != 1) {
+            //subCPUの引数に関係なくサブCPUの状況を測定する
+            subCPU(0);
 
-                //モーターを停止させる
-                move(0, 0, 0, 0, 1);
-
-                //無条件ループの最初に戻り続ける
+            //もしサブCPUが起動していなければ無条件ループの最初に戻る
+            if (subCPUComp == 0) {
                 continue;
             }
 
             //============================================================
 
-            //現在値を取得する
-            now = get_bno(0);
+            //地磁気センサを使用して姿勢制御を行う
 
-            //前方方向と現在値との角度差を算出する
-            dif = front - now;
+            //dirFixの引数が0ならP制御、1ならPD制御
+            dirFix(1);
 
-            //角度差の値を比較しやすいように調整する
-            if (dif <= -180) {
-                dif += 360;
-            }
-            else if (dif >= 180) {
-                dif -= 360;
-            }
-
-            //------------------------------------------------------------
-
-            //もし角度差が前方方向の範囲しきい値の中にないなら
-            if ((-1 * FRONT_RANGE <= dif && dif <= FRONT_RANGE) == FALSE) {
-
-                //サブCPUの白色LEDを点灯させる
-                sub_io_set_Led(1, 0, on);
-
-                //微分係数を算出する
-                nowD = (now - previous) / DELTA_T;
-
-                //モーターパワーを算出する
-                difMotor = KP * dif + KD * (nowD - previousD);
-                //difMotor = KP * dif;
-
-                //比例制御の入っていない関数でモーターに出力する
-                moveNatural(difMotor, difMotor, difMotor, difMotor);
-
-                //直近過去の角度を更新する
-                previous = now;
-                //直近過去の微分係数を更新する
-                previousD = nowD;
-
-                //無条件ループの最初に戻る
+            //もし姿勢制御が完了していなければ無条件ループの最初に戻る
+            if (dirFixComp == 0) {
                 continue;
             }
 
-            //サブCPUの白色LEDを消灯させる
-            sub_io_set_Led(1, 0, off);
-
             //============================================================
 
-            //ラインセンサの入力値を取得してグローバル変数をラインセンサ用に更新する
-            refreshSensor(1, 0);
+            //ラインセンサを使用して白線避けを行う
 
-            //------------------------------------------------------------
+            //lineAvoidの引数に関係なく白線避けを行う
+            lineAvoid(0);
 
-            //もしラインセンサのどれかが反応していたら
-            if (lowQuantity != 4) {
-
-                //サブCPUの赤色LEDを点灯させる
-                sub_io_set_Led(1, 1, on);
-
-                moveNatural(0, 0, 0, 0);
-                wait_ms(LINESTOP);
-
-                //ラインセンサが1つ反応している
-                if (lowQuantity == 3) {
-
-                    //反応しているラインセンサに応じて動く
-                    switch (highIndex) {
-
-                    case 0:
-                        //前ラインセンサが反応
-                        move(-80, -80, 80, 80, LINE);
-                        wait_ms(LINEAVOID_DEFAULT);
-
-                        motionWrite(1);
-
-                        break;
-
-                    case 1:
-                        //左ラインセンサが反応
-                        move(80, -80, -80, 80, LINE);
-                        wait_ms(LINEAVOID_LONG);
-
-                        motionWrite(2);
-                        if (motionLongFlag == 1) {
-                            move(80, 80, -80, -80, BALL);
-                            wait_ms(200);
-
-                            clr_timer(2);
-
-                            while (TRUE) {
-                                refreshSensor(1, 0);
-                                if (gT[2] > 300 || lowQuantity != 4) {
-                                    break;
-                                }
-                                move(80, 80, -80, -80, BALL);
-                            }
-                            motionLongFlag = 0;
-                        }
-
-                        clr_timer(1);
-
-                        break;
-
-                    case 2:
-                        //後ろラインセンサが反応
-                        move(80, 80, -80, -80, LINE);
-                        wait_ms(LINEAVOID_DEFAULT);
-
-                        motionWrite(3);
-
-                        break;
-
-                    case 3:
-                        //右ラインセンサが反応
-                        move(-80, 80, 80, -80, LINE);
-                        wait_ms(LINEAVOID_LONG);
-
-                        motionWrite(4);
-                        if (motionLongFlag == 1) {
-                            move(80, 80, -80, -80, BALL);
-                            wait_ms(200);
-
-                            clr_timer(2);
-
-                            while (TRUE) {
-                                refreshSensor(1, 0);
-                                if (gT[2] > 300 || lowQuantity != 4) {
-                                    break;
-                                }
-                                move(80, 80, -80, -80, BALL);
-                            }
-                            motionLongFlag = 0;
-                        }
-
-                        clr_timer(1);
-
-                        break;
-                    }
-
-                    continue;
-                }
-
-                //------------------------------------------------------------
-                
-                //ラインセンサが2つ反応している
-                else if (lowQuantity == 2) {
-                    switch (highIndex) {
-                    case 0:
-                        switch (highIndex2) {
-                        case 1:
-                            move(0, -80, 0, 80, LINE);
-                            wait_ms(LINEAVOID_DEFAULT);
-                            break;
-
-                        case 3:
-                            move(-80, 0, 80, 0, LINE);
-                            wait_ms(LINEAVOID_DEFAULT);
-                            break;
-
-                        default:
-                            move(-80, -80, 80, 80, LINE);
-                            wait_ms(LINEAVOID_DEFAULT);
-                            break;
-                        }
-                        break;
-
-                    case 1:
-                        switch (highIndex2) {
-                        case 0:
-                            move(0, -80, 0, 80, LINE);
-                            wait_ms(LINEAVOID_DEFAULT);
-                            break;
-
-                        case 2:
-                            move(80, 0, -80, 0, LINE);
-                            wait_ms(LINEAVOID_DEFAULT);
-                            break;
-
-                        default:
-                            move(80, -80, -80, 80, LINE);
-                            wait_ms(LINEAVOID_DEFAULT);
-                            break;
-                        }
-                        break;
-
-                    case 2:
-                        switch (highIndex2) {
-                        case 1:
-                            move(80, 0, -80, 0, LINE);
-                            wait_ms(LINEAVOID_DEFAULT);
-                            break;
-
-                        case 3:
-                            move(0, 80, 0, -80, LINE);
-                            wait_ms(LINEAVOID_DEFAULT);
-                            break;
-
-                        default:
-                            move(80, 80, -80, -80, LINE);
-                            wait_ms(LINEAVOID_DEFAULT);
-                            break;
-                        }
-                        break;
-
-                    case 3:
-                        switch (highIndex2) {
-                        case 0:
-                            move(-80, 0, 80, 0, LINE);
-                            wait_ms(LINEAVOID_DEFAULT);
-                            break;
-
-                        case 2:
-                            move(0, 80, 0, -80, LINE);
-                            wait_ms(LINEAVOID_DEFAULT);
-                            break;
-
-                        default:
-                            move(-80, 80, 80, -80, LINE);
-                            wait_ms(LINEAVOID_DEFAULT);
-                            break;
-                        }
-                        break;
-                    }
-
-                    continue;
-                }
-                
+            //もし姿勢制御が完了していなければ無条件ループの最初に戻る
+            if (lineAvoidComp == 0) {
+                continue;
             }
-
-            //サブCPUの赤色LEDを消灯させる
-            sub_io_set_Led(1, 1, off);
 
             //============================================================
             
@@ -1500,6 +1487,7 @@ main:
             case 1:
                 //中距離
                 
+                //タイマー1をリセットする
                 clr_timer(0);
 
                 //自陣ゴールへのシュートをブロック
@@ -1588,13 +1576,10 @@ main:
                     break;
 
                 case 2:
-                    //左：左後ろ
-                    move(-80, 0, 80, 0, BALL);
-                    break;
-
                 case 3:
                 case 5:
-                    //左後ろ/右後ろ：後ろ
+                case 6:
+                    //左/左後ろ/右後ろ/右：後ろ
                     move(-80, -80, 80, 80, BALL);
                     break;
 
@@ -1603,16 +1588,14 @@ main:
                     //後ろ/右前：右
                     move(80, -80, -80, 80, BALL);
                     break;
-
-                case 6:
-                    //右：右後ろ
-                    move(0, -80, 0, 80, BALL);
-                    break;
                 }
                 break;
             }
             
             //============================================================
+
+            //無条件ループの最初に戻る
+            continue;
         }
         break;
 
@@ -1624,26 +1607,25 @@ main:
 
             //============================================================
 
-            //サブCPUの変数を読み取る（読み取れない場合アリ）
-            subFlag = sub_io_get_gV(1, VAR_Z);
+            //サブCPUが起動しているかを測定する
 
-            //もしサブCPUの変数が1以外（読み取れない、他の値など）なら
-            if (subFlag != 1) {
+            //subCPUの引数に関係なくサブCPUの状況を測定する
+            subCPU(0);
 
-                //すべてのモーターを停止させる
-                move(0, 0, 0, 0, LINE);
+            //もしサブCPUが起動していなければ無条件ループの最初に戻る
+            if (subCPUComp == 0) {
 
+                //メインCPUとサブCPUのすべてのLEDを消灯させる
                 set_Led(0, off);
                 set_Led(1, off);
                 sub_io_set_Led(1, 0, off);
                 sub_io_set_Led(1, 1, off);
 
+                //ボタンが押された回数を初期化する
                 btnTime = 0;
 
+                //モード設定セクションに移動する
                 goto modeSetting;
-
-                //無条件ループの最初に戻り続ける
-                continue;
             }
 
             //============================================================
@@ -1690,26 +1672,25 @@ main:
 
             //============================================================
 
-            //サブCPUの変数を読み取る（読み取れない場合アリ）
-            subFlag = sub_io_get_gV(1, VAR_Z);
+            //サブCPUが起動しているかを測定する
 
-            //もしサブCPUの変数が1以外（読み取れない、他の値など）なら
-            if (subFlag != 1) {
+            //subCPUの引数に関係なくサブCPUの状況を測定する
+            subCPU(0);
 
-                //すべてのモーターを停止させる
-                move(0, 0, 0, 0, LINE);
+            //もしサブCPUが起動していなければ無条件ループの最初に戻る
+            if (subCPUComp == 0) {
 
+                //メインCPUとサブCPUのすべてのLEDを消灯させる
                 set_Led(0, off);
                 set_Led(1, off);
                 sub_io_set_Led(1, 0, off);
                 sub_io_set_Led(1, 1, off);
 
+                //ボタンが押された回数を初期化する
                 btnTime = 0;
 
+                //モード設定セクションに移動する
                 goto modeSetting;
-
-                //無条件ループの最初に戻り続ける
-                continue;
             }
 
             //============================================================
@@ -1796,26 +1777,25 @@ main:
 
             //============================================================
 
-            //サブCPUの変数を読み取る（読み取れない場合アリ）
-            subFlag = sub_io_get_gV(1, VAR_Z);
+            //サブCPUが起動しているかを測定する
 
-            //もしサブCPUの変数が1以外（読み取れない、他の値など）なら
-            if (subFlag != 1) {
+            //subCPUの引数に関係なくサブCPUの状況を測定する
+            subCPU(0);
 
-                //すべてのモーターを停止させる
-                move(0, 0, 0, 0, LINE);
+            //もしサブCPUが起動していなければ無条件ループの最初に戻る
+            if (subCPUComp == 0) {
 
+                //メインCPUとサブCPUのすべてのLEDを消灯させる
                 set_Led(0, off);
                 set_Led(1, off);
                 sub_io_set_Led(1, 0, off);
                 sub_io_set_Led(1, 1, off);
 
+                //ボタンが押された回数を初期化する
                 btnTime = 0;
 
+                //モード設定セクションに移動する
                 goto modeSetting;
-
-                //無条件ループの最初に戻り続ける
-                continue;
             }
 
             //============================================================
@@ -1862,31 +1842,29 @@ main:
 
     case 7:
         //ボールの左右各合計値比較チェッカーモード
-
         while (TRUE) {
 
             //============================================================
 
-            //サブCPUの変数を読み取る（読み取れない場合アリ）
-            subFlag = sub_io_get_gV(1, VAR_Z);
+            //サブCPUが起動しているかを測定する
 
-            //もしサブCPUの変数が1以外（読み取れない、他の値など）なら
-            if (subFlag != 1) {
+            //subCPUの引数に関係なくサブCPUの状況を測定する
+            subCPU(0);
 
-                //すべてのモーターを停止させる
-                move(0, 0, 0, 0, LINE);
+            //もしサブCPUが起動していなければ無条件ループの最初に戻る
+            if (subCPUComp == 0) {
 
+                //メインCPUとサブCPUのすべてのLEDを消灯させる
                 set_Led(0, off);
                 set_Led(1, off);
                 sub_io_set_Led(1, 0, off);
                 sub_io_set_Led(1, 1, off);
 
+                //ボタンが押された回数を初期化する
                 btnTime = 0;
 
+                //モード設定セクションに移動する
                 goto modeSetting;
-
-                //無条件ループの最初に戻り続ける
-                continue;
             }
 
             //============================================================
@@ -1989,26 +1967,25 @@ main:
 
             //============================================================
 
-            //サブCPUの変数を読み取る（読み取れない場合アリ）
-            subFlag = sub_io_get_gV(1, VAR_Z);
+            //サブCPUが起動しているかを測定する
 
-            //もしサブCPUの変数が1以外（読み取れない、他の値など）なら
-            if (subFlag != 1) {
+            //subCPUの引数に関係なくサブCPUの状況を測定する
+            subCPU(0);
 
-                //すべてのモーターを停止させる
-                move(0, 0, 0, 0, LINE);
+            //もしサブCPUが起動していなければ無条件ループの最初に戻る
+            if (subCPUComp == 0) {
 
+                //メインCPUとサブCPUのすべてのLEDを消灯させる
                 set_Led(0, off);
                 set_Led(1, off);
                 sub_io_set_Led(1, 0, off);
                 sub_io_set_Led(1, 1, off);
 
+                //ボタンが押された回数を初期化する
                 btnTime = 0;
 
+                //モード設定セクションに移動する
                 goto modeSetting;
-
-                //無条件ループの最初に戻り続ける
-                continue;
             }
 
             //============================================================
@@ -2189,26 +2166,25 @@ main:
 
             //============================================================
 
-            //サブCPUの変数を読み取る（読み取れない場合アリ）
-            subFlag = sub_io_get_gV(1, VAR_Z);
+            //サブCPUが起動しているかを測定する
 
-            //もしサブCPUの変数が1以外（読み取れない、他の値など）なら
-            if (subFlag != 1) {
+            //subCPUの引数に関係なくサブCPUの状況を測定する
+            subCPU(0);
 
-                //すべてのモーターを停止させる
-                move(0, 0, 0, 0, LINE);
+            //もしサブCPUが起動していなければ無条件ループの最初に戻る
+            if (subCPUComp == 0) {
 
+                //メインCPUとサブCPUのすべてのLEDを消灯させる
                 set_Led(0, off);
                 set_Led(1, off);
                 sub_io_set_Led(1, 0, off);
                 sub_io_set_Led(1, 1, off);
 
+                //ボタンが押された回数を初期化する
                 btnTime = 0;
 
+                //モード設定セクションに移動する
                 goto modeSetting;
-
-                //無条件ループの最初に戻り続ける
-                continue;
             }
 
             //============================================================
